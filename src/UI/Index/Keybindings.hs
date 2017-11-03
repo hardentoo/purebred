@@ -10,8 +10,7 @@ import Types
 -- | Default Keybindings
 indexKeybindings :: [Keybinding 'BrowseMail (Brick.Next AppState)]
 indexKeybindings =
-    [ Keybinding (V.EvKey V.KEsc []) quit
-    , Keybinding (V.EvKey (V.KChar ':') []) (noop `chain'` (focus :: Action 'SearchMail AppState) `chain` continue)
+    [ Keybinding (V.EvKey V.KEsc []) (noop `chain'` (focus :: Action 'BrowseThreads AppState) `chain'` (reloadList :: Action 'BrowseThreads AppState) `chain` continue)
     , Keybinding (V.EvKey V.KEnter []) (displayMail `chain` continue)
     , Keybinding (V.EvKey V.KDown []) (mailIndexDown `chain` continue)
     , Keybinding (V.EvKey V.KUp []) (mailIndexUp `chain` continue)
@@ -19,19 +18,26 @@ indexKeybindings =
     , Keybinding (V.EvKey (V.KChar 'm') []) (composeMail `chain` continue)
     , Keybinding (V.EvKey (V.KChar 'r') []) (replyMail `chain` continue)
     , Keybinding (V.EvKey (V.KChar 't') []) (setUnread `chain` continue)
-    , Keybinding (V.EvKey (V.KChar '?') []) (viewHelp `chain` continue)
-    , Keybinding (V.EvKey (V.KChar 'R') []) (reloadMails `chain` continue)
+    , Keybinding (V.EvKey (V.KChar '?') []) (noop `chain'` (focus :: Action 'Help AppState) `chain` continue)
     , Keybinding (V.EvKey (V.KChar '`') []) (noop `chain'` (focus :: Action 'ManageTags AppState) `chain` continue)
+    ]
+
+threadKeybindings :: [Keybinding 'BrowseThreads (Brick.Next AppState)]
+threadKeybindings =
+    [ Keybinding (V.EvKey V.KEsc []) quit
+    , Keybinding (V.EvKey V.KEnter []) (displayThreadMails `chain'` (focus :: Action 'BrowseMail AppState) `chain` continue)
+    , Keybinding (V.EvKey (V.KChar ':') []) (noop `chain'` (focus :: Action 'SearchMail AppState) `chain` continue)
+    , Keybinding (V.EvKey (V.KChar '?') []) (viewHelp `chain` continue)
     ]
 
 indexsearchKeybindings :: [Keybinding 'SearchMail (Brick.Next AppState)]
 indexsearchKeybindings =
     [ Keybinding (V.EvKey V.KEsc []) (backToIndex `chain` continue)
-    , Keybinding (V.EvKey V.KEnter []) (done `chain` backToIndex `chain` continue)
+    , Keybinding (V.EvKey V.KEnter []) (done `chain'` (focus :: Action 'BrowseThreads AppState) `chain` continue)
     ]
 
 managetagsKeybindings :: [Keybinding 'ManageTags (Brick.Next AppState)]
 managetagsKeybindings =
-    [ Keybinding (V.EvKey V.KEsc []) (abort `chain` backToIndex `chain` continue)
-    , Keybinding (V.EvKey V.KEnter []) (done `chain` backToIndex `chain` continue)
+    [ Keybinding (V.EvKey V.KEsc []) (abort `chain'` (focus :: Action 'BrowseMail AppState) `chain` continue)
+    , Keybinding (V.EvKey V.KEnter []) (done `chain'` (focus :: Action 'BrowseMail AppState) `chain` continue)
     ]

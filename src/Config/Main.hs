@@ -12,7 +12,8 @@ import System.Environment (lookupEnv)
 import Data.Maybe (fromMaybe)
 import UI.ComposeEditor.Keybindings (composeEditorKeybindings)
 import UI.Index.Keybindings
-       (indexKeybindings, indexsearchKeybindings, managetagsKeybindings)
+       (indexKeybindings, indexsearchKeybindings, managetagsKeybindings,
+        threadKeybindings)
 import UI.Mail.Keybindings (displayMailKeybindings, displayIndexKeybindings)
 import UI.Help.Keybindings (helpKeybindings)
 import Types
@@ -95,7 +96,8 @@ defaultConfig =
       , _mvIndexKeybindings = displayIndexKeybindings
       }
     , _confIndexView = IndexViewSettings
-      { _ivKeybindings = indexKeybindings
+      { _ivKeybindings = threadKeybindings
+      , _ivMailsKeybindings = indexKeybindings
       , _ivSearchKeybindings = indexsearchKeybindings
       , _ivManageTagsKeybindings = managetagsKeybindings
       }

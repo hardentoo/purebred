@@ -39,7 +39,7 @@ packages:
 - '.'
 - location:
     git: https://github.com/purebred-mua/hs-notmuch.git
-    commit: 80018d8575b97f622cfcbfae509b1016e1b1bba2
+    commit: cd376777bea8ab2399b87803d1cec336feeacd96
   extra-dep: true
 
 # Dependency packages to be pulled from upstream that are not in the resolver

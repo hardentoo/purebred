@@ -17,10 +17,12 @@ import Control.Lens.Setter (set)
 import Graphics.Vty.Input.Events (Event)
 import Data.Time.Clock (UTCTime(..))
 import Data.Time.Format (formatTime, defaultTimeLocale)
+import Data.Semigroup ((<>))
 import Data.Text (Text, pack, unwords)
 import UI.Draw.Main (editorDrawContent)
 import UI.Keybindings (handleEvent)
 import UI.Status.Main (statusbar)
+import UI.Draw.Main (fillLine)
 import Storage.Notmuch (mailIsNew)
 import Types
 import Config.Main
@@ -35,17 +37,29 @@ drawMain s = [ui]
     ui = vBox [renderMailList s, statusbar s, vLimit 1 inputBox]
 
 renderMailList :: AppState -> Widget Name
-renderMailList s = let listFocus = view asAppMode s == BrowseMail
-                   in L.renderList (listDrawElement s) listFocus (view (asMailIndex . miListOfMails) s)
+renderMailList s = case view asAppMode s of
+                     BrowseThreads -> L.renderList (listDrawThread s) True $ view (asMailIndex . miListOfThreads) s
+                     SearchMail -> L.renderList (listDrawThread s) True $ view (asMailIndex . miListOfThreads) s
+                     _ -> L.renderList (listDrawMail s) True $ view (asMailIndex . miListOfMails) s
 
-listDrawElement :: AppState -> Bool -> NotmuchMail -> Widget Name
-listDrawElement s sel a =
+listDrawMail :: AppState -> Bool -> NotmuchMail -> Widget Name
+listDrawMail s sel a =
     let settings = view (asConfig . confNotmuch) s
-        isNewMail = mailIsNew (view nmNewTag settings) a
+        isNewMail = mailIsNew (view nmNewTag settings) (view mailTags a)
         widget = padLeft (Pad 1) $ hLimit 15 (txt $ view mailFrom a) <+>
-                 padLeft (Pad 1) (txt $ formatDate (view mailDate a)) <+>
                  padLeft (Pad 2) (txt (view mailSubject a)) <+>
-                 padLeft Max (renderMailTagsWidget a (view nmNewTag settings))
+                 padLeft Max (renderTagsWidget (view mailTags a) (view nmNewTag settings))
+    in withAttr (getListAttr isNewMail sel) widget
+
+listDrawThread :: AppState -> Bool -> NotmuchThread -> Widget Name
+listDrawThread s sel a =
+    let settings = view (asConfig . confNotmuch) s
+        isNewMail = mailIsNew (view nmNewTag settings) (view thTags a)
+        widget = padLeft (Pad 1) (txt $ formatDate (view thDate a)) <+>
+                 padLeft (Pad 1) (txt $ pack $ "(" <> show (view thReplies a) <> ")") <+>
+                 padLeft (Pad 1) (renderTagsWidget (view thTags a) (view nmNewTag settings)) <+>
+                 padLeft (Pad 1) (hLimit 15 (txt $ unwords $ view thAuthors a)) <+>
+                 padLeft (Pad 1) (txt (view thSubject a)) <+> fillLine
     in withAttr (getListAttr isNewMail sel) widget
 
 getListAttr :: Bool  -- ^ new?
@@ -59,9 +73,9 @@ getListAttr False False = listAttr  -- not selected and not new
 formatDate :: UTCTime -> Text
 formatDate t = pack $ formatTime defaultTimeLocale "%d/%b" (utctDay t)
 
-renderMailTagsWidget :: NotmuchMail -> Text -> Widget Name
-renderMailTagsWidget m ignored =
-    let ts = filter (/= ignored) $ view mailTags m
+renderTagsWidget :: [Text] -> Text -> Widget Name
+renderTagsWidget tgs ignored =
+    let ts = filter (/= ignored) tgs
     in withAttr mailTagsAttr $ vLimit 1 $ txt $ unwords ts
 
 -- | We currently have two modes on the main view we need to distinguish
@@ -72,13 +86,18 @@ mainEvent s =
     case view asAppMode s of
         BrowseMail ->
             handleEvent
-                (view (asConfig . confIndexView . ivKeybindings) s)
+                (view (asConfig . confIndexView . ivMailsKeybindings) s)
                 listEventDefault
                 s
         ManageTags ->
             handleEvent
                 (view (asConfig . confIndexView . ivManageTagsKeybindings) s)
                 searchInputEventDefault
+                s
+        BrowseThreads ->
+            handleEvent
+            (view (asConfig . confIndexView . ivKeybindings) s)
+            (\_ e -> M.continue =<< T.handleEventLensed s (asMailIndex . miListOfThreads) L.handleListEvent e)
                 s
         _ ->
             handleEvent

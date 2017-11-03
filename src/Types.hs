@@ -24,6 +24,7 @@ import Error
 -- | The global application mode
 data Mode
     = BrowseMail   -- ^ input focus goes to navigating the list of mails (main screen)
+    | BrowseThreads
     | SearchMail   -- ^ input focus goes to manipulating the notmuch search (main screen)
     | ViewMail   -- ^ focus is on the screen showing the entire mail
     | GatherHeaders   -- ^ focus is on the command line to gather input for composing an e-mail
@@ -36,6 +37,7 @@ data Mode
 data Name =
     EditorInput
     | ListOfMails
+    | ListOfThreads
     | ScrollingMailView
     | GatherHeadersFrom
     | GatherHeadersTo
@@ -53,13 +55,17 @@ search and composes e-mails from here.
 data MailIndex = MailIndex
     { _miListOfMails  :: L.List Name NotmuchMail
     , _miSearchEditor :: E.Editor T.Text Name
+    , _miListOfThreads :: L.List Name NotmuchThread
     }
 
 miListOfMails :: Lens' MailIndex (L.List Name NotmuchMail)
-miListOfMails f (MailIndex a b) = fmap (\a' -> MailIndex a' b) (f a)
+miListOfMails f (MailIndex a b c) = fmap (\a' -> MailIndex a' b c) (f a)
 
 miSearchEditor :: Lens' MailIndex (E.Editor T.Text Name)
-miSearchEditor f (MailIndex a b) = fmap (\b' -> MailIndex a b') (f b)
+miSearchEditor f (MailIndex a b c) = fmap (\b' -> MailIndex a b' c) (f b)
+
+miListOfThreads :: Lens' MailIndex (L.List Name NotmuchThread)
+miListOfThreads f (MailIndex a b c) = fmap (\c' -> MailIndex a b c') (f c)
 
 data HeadersState = ShowAll | Filtered
 
@@ -168,19 +174,23 @@ hvKeybindings :: Lens' HelpViewSettings [Keybinding 'Help (Next AppState)]
 hvKeybindings f (HelpViewSettings a) = fmap (\a' -> HelpViewSettings a') (f a)
 
 data IndexViewSettings = IndexViewSettings
-    { _ivKeybindings :: [Keybinding 'BrowseMail (Next AppState)]
+    { _ivKeybindings :: [Keybinding 'BrowseThreads (Next AppState)]
+    , _ivMailsKeybindings :: [Keybinding 'BrowseMail (Next AppState)]
     , _ivSearchKeybindings :: [Keybinding 'SearchMail (Next AppState)]
     , _ivManageTagsKeybindings :: [Keybinding 'ManageTags (Next AppState)]
     }
 
-ivKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseMail (Next AppState)]
-ivKeybindings f (IndexViewSettings a b c) = fmap (\a' -> IndexViewSettings a' b c) (f a)
+ivKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseThreads (Next AppState)]
+ivKeybindings f (IndexViewSettings a b c d) = fmap (\a' -> IndexViewSettings a' b c d) (f a)
+
+ivMailsKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseMail (Next AppState)]
+ivMailsKeybindings f (IndexViewSettings a b c d) = fmap (\b' -> IndexViewSettings a b' c d) (f b)
 
 ivSearchKeybindings :: Lens' IndexViewSettings [Keybinding 'SearchMail (Next AppState)]
-ivSearchKeybindings f (IndexViewSettings a b c) = fmap (\b' -> IndexViewSettings a b' c) (f b)
+ivSearchKeybindings f (IndexViewSettings a b c d) = fmap (\c' -> IndexViewSettings a b c' d) (f c)
 
 ivManageTagsKeybindings :: Lens' IndexViewSettings [Keybinding 'ManageTags (Next AppState)]
-ivManageTagsKeybindings f (IndexViewSettings a b c) = fmap (\c' -> IndexViewSettings a b c') (f c)
+ivManageTagsKeybindings f (IndexViewSettings a b c d) = fmap (\d' -> IndexViewSettings a b c d') (f d)
 
 data MailViewSettings = MailViewSettings
     { _mvIndexRows           :: Int
@@ -294,3 +304,29 @@ mailTags = lens _mailTags (\m t -> m { _mailTags = t })
 mailId :: Lens' NotmuchMail ByteString
 mailId = lens _mailId (\m i -> m { _mailId = i })
 
+data NotmuchThread = NotmuchThread
+    { _thSubject :: T.Text
+    , _thAuthors :: [T.Text]
+    , _thDate :: UTCTime
+    , _thTags :: [T.Text]
+    , _thReplies :: Int
+    , _thId :: ByteString
+    } deriving (Show, Eq)
+
+thSubject :: Lens' NotmuchThread T.Text
+thSubject = lens _thSubject (\m s -> m { _thSubject = s })
+
+thAuthors :: Lens' NotmuchThread [T.Text]
+thAuthors = lens _thAuthors (\m f -> m { _thAuthors = f })
+
+thDate :: Lens' NotmuchThread UTCTime
+thDate = lens _thDate (\m d -> m { _thDate = d })
+
+thTags :: Lens' NotmuchThread [T.Text]
+thTags = lens _thTags (\m t -> m { _thTags = t })
+
+thReplies :: Lens' NotmuchThread Int
+thReplies = lens _thReplies (\m t -> m { _thReplies = t })
+
+thId :: Lens' NotmuchThread ByteString
+thId = lens _thId (\m t -> m { _thId = t })

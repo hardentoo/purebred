@@ -8,9 +8,10 @@ import qualified Brick.Widgets.Edit as E
 import qualified Brick.Widgets.List as L
 import Control.Lens.Getter (view)
 import Control.Monad.Except (runExceptT)
+import qualified Data.Vector as Vector
 import System.Exit (die)
 
-import Storage.Notmuch (getMessages)
+import Storage.Notmuch (getThreads)
 import UI.ComposeEditor.Main (composeEditor, drawComposeEditor)
 import UI.GatherHeaders.Main
        (drawInteractiveHeaders, interactiveGatherHeaders)
@@ -24,6 +25,7 @@ drawUI :: AppState -> [Widget Name]
 drawUI s =
     case view asAppMode s of
         BrowseMail -> drawMain s
+        BrowseThreads -> drawMain s
         SearchMail -> drawMain s
         ManageTags -> drawMain s
         ViewMail -> drawMail s
@@ -36,6 +38,7 @@ appEvent s ev = case ev of
   T.VtyEvent e ->
     case view asAppMode s of
         BrowseMail -> mainEvent s e
+        BrowseThreads -> mainEvent s e
         SearchMail -> mainEvent s e
         ManageTags -> mainEvent s e
         ViewMail -> mailEvent s e
@@ -47,19 +50,20 @@ appEvent s ev = case ev of
 initialState :: InternalConfiguration -> IO AppState
 initialState conf = do
     let searchterms = view (confNotmuch . nmSearch) conf
-    r <- runExceptT $ getMessages searchterms (view confNotmuch conf)
+    r <- runExceptT $ getThreads searchterms (view confNotmuch conf)
     case r of
       Left e -> die $ show e  -- TODO don't crash?
       Right vec ->
         let
           mi = MailIndex
-                (L.list ListOfMails vec 1)
+                (L.list ListOfMails Vector.empty 1)
                 (E.editor
                      EditorInput
                      Nothing
                      searchterms)
+                (L.list ListOfThreads vec 1)
           mv = MailView Nothing Filtered
-        in pure $ AppState conf mi mv initialCompose BrowseMail Nothing
+        in pure $ AppState conf mi mv initialCompose BrowseThreads Nothing
 
 theApp :: AppState -> M.App AppState e Name
 theApp s =

@@ -10,12 +10,12 @@ import Control.Monad.Except (MonadError, throwError)
 import qualified Data.ByteString as B
 import Data.Traversable (traverse)
 import Data.List (union, notElem)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Vector as Vec
 import System.Process (readProcess)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import Types (NotmuchMail(..), NotmuchSettings, nmDatabase, mailId, mailTags)
+import Types
 import Control.Lens (view, over, set)
 
 import Notmuch
@@ -39,6 +39,33 @@ getMessages s settings =
               msgs <- query db (FreeForm $ T.unpack s) >>= messages
               mails <- liftIO $ mapM messageToMail msgs
               pure $ Vec.fromList mails
+
+-- | creates a vector of parsed mails which are tips of each thread
+--
+getThreads
+  :: (HasThreads Query, MonadError Error m, MonadIO m)
+  => T.Text
+  -> NotmuchSettings FilePath
+  -> m (Vec.Vector NotmuchThread)
+getThreads s settings =
+  bracketT (databaseOpenReadOnly (view nmDatabase settings)) databaseDestroy go
+  where
+    go db = do
+        ts <- query db (FreeForm $ T.unpack s) >>= threads
+        t <- liftIO $ traverse threadToThread ts
+        pure $ Vec.fromList t
+
+getThreadMessages
+  :: (MonadError Error m, MonadIO m)
+  => FilePath
+  -> NotmuchThread
+  -> m (Vec.Vector NotmuchMail)
+getThreadMessages fp t =
+  bracketT (databaseOpenReadOnly fp) databaseDestroy go
+  where go db = do
+          msgs <- getThread db (view thId t) >>= messages
+          mails <- liftIO $ traverse messageToMail msgs
+          pure $ Vec.fromList mails
 
 mailFilepath
   :: (MonadError Error m, MonadIO m)
@@ -93,12 +120,35 @@ messageToMail
 messageToMail m = do
     tgs <- tags m
     let tgs' = decodeUtf8 . getTag <$> tgs
-    NotmuchMail <$>
-      (decodeUtf8 . fromMaybe "" <$> messageHeader "Subject" m) <*>
-      (decodeUtf8 . fromMaybe "" <$> messageHeader "From" m) <*>
-      messageDate m <*>
-      pure tgs' <*>
-      messageId m
+    NotmuchMail
+      <$> (decodeUtf8 . fromMaybe "" <$> messageHeader "Subject" m)
+      <*> (decodeUtf8 . fromMaybe "" <$> messageHeader "From" m)
+      <*> messageDate m
+      <*> pure tgs'
+      <*> messageId m
+
+getThread
+  :: (MonadError Error m, MonadIO m)
+  => Database mode -> B.ByteString -> m (Thread mode)
+getThread db tid = do
+  t <- query db (Thread tid) >>= threads
+  maybe (throwError (ThreadNotFound tid)) pure (listToMaybe t)
+
+threadToThread
+  :: (HasTags (Thread a), HasThread (Thread a))
+  => Thread a
+  -> IO NotmuchThread
+threadToThread m = do
+    tgs <- tags m
+    auth <- threadAuthors m
+    let tgs' = decodeUtf8 . getTag <$> tgs
+    NotmuchThread
+      <$> (decodeUtf8 <$> threadSubject m)
+      <*> (pure $ view matchedAuthors auth)
+      <*> threadNewestDate m
+      <*> pure tgs'
+      <*> threadTotalMessages m
+      <*> threadId m
 
 getDatabasePath :: IO FilePath
 getDatabasePath = getFromNotmuchConfig "database.path"
@@ -110,5 +160,5 @@ getFromNotmuchConfig key = do
   stdout <- readProcess cmd args []
   pure $ filter (/= '\n') stdout
 
-mailIsNew :: T.Text -> NotmuchMail -> Bool
-mailIsNew ignoredTag m = ignoredTag `elem` view mailTags m
+mailIsNew :: T.Text -> [T.Text] -> Bool
+mailIsNew ignoredTag tgs = ignoredTag `elem` tgs

@@ -14,6 +14,7 @@ module UI.Actions (
   , abort
   , noop
   , displayMail
+  , displayThreadMails
   , setUnread
   , mailIndexUp
   , mailIndexDown
@@ -31,7 +32,7 @@ module UI.Actions (
   , setTags
   , addTags
   , removeTags
-  , reloadMails
+  , reloadList
   ) where
 
 import qualified Brick.Main as Brick
@@ -42,19 +43,18 @@ import qualified Brick.Widgets.List as L
 import Network.Mail.Mime (Address(..), renderSendMail, simpleMail')
 import Data.Proxy
 import Data.Semigroup ((<>))
-import Data.Vector (Vector)
 import Data.Text (splitOn, strip, intercalate, unlines, Text)
 import Data.Text.Lazy.IO (readFile)
 import Prelude hiding (readFile, unlines)
 import Control.Applicative ((<|>))
-import Control.Lens (set, over, view, _Just, (&))
+import Control.Lens (set, over, view, _Just, (&), Getting)
 import Control.Lens.Fold ((^?!))
 import Control.Monad ((>=>))
 import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Text.Zipper (currentLine, gotoEOL, textZipper)
 import qualified Storage.Notmuch as Notmuch
-       (getMessages, addTags, setTags, removeTags, setNotmuchMailTags)
+       (getThreadMessages, getThreads, addTags, setTags, removeTags, setNotmuchMailTags)
 import Storage.ParsedMail (parseMail, getTo, getFrom, getSubject)
 import Types
 import Error
@@ -75,11 +75,17 @@ instance ModeTransition s s where
 
 instance ModeTransition 'ManageTags 'BrowseMail where
 
-instance ModeTransition 'BrowseMail 'SearchMail where
+instance ModeTransition 'BrowseThreads 'SearchMail where
 
 instance ModeTransition 'BrowseMail 'ManageTags where
 
 instance ModeTransition 'ViewMail 'BrowseMail where
+
+instance ModeTransition 'BrowseThreads 'BrowseMail where
+
+instance ModeTransition 'BrowseMail 'BrowseThreads  where
+
+instance ModeTransition 'SearchMail 'BrowseThreads  where
 
 -- | An action - typically completed by a key press (e.g. Enter) - and it's
 -- contents are used to be applied to an action.
@@ -135,6 +141,9 @@ instance Focusable 'ManageTags where
 instance Focusable 'BrowseMail where
   switchFocus _ = pure
 
+instance Focusable 'BrowseThreads where
+  switchFocus _ = pure . set asAppMode BrowseThreads
+
 -- | Problem: How to chain actions, which operate not on the same mode, but a
 -- mode switched by the previous action?
 class HasMode (a :: Mode) where
@@ -152,6 +161,9 @@ instance HasMode 'ViewMail where
 
 instance HasMode 'ManageTags where
   mode _ = ManageTags
+
+instance HasMode 'BrowseThreads where
+  mode _ = BrowseThreads
 
 quit :: Action ctx (T.Next AppState)
 quit = Action "quit the application" Brick.halt
@@ -225,6 +237,13 @@ displayMail =
     , _aAction = \s -> liftIO $ updateStateWithParsedMail s >>= updateReadState Notmuch.removeTags
     }
 
+displayThreadMails :: Action 'BrowseThreads AppState
+displayThreadMails =
+    Action
+    { _aDescription = "display an e-mail for threads"
+    , _aAction = liftIO . setMailsForThread
+    }
+
 setUnread :: Action 'BrowseMail AppState
 setUnread =
     Action
@@ -277,41 +296,52 @@ setTags :: [Text] -> Action ctx AppState
 setTags ts =
     Action
     { _aDescription = "apply given tags"
-    , _aAction = (\s -> liftIO . selectedMailHelper s $ \m -> applyMailTags m ts Notmuch.setTags s)
+    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.setTags s)
     }
 
 addTags :: [Text] -> Action ctx AppState
 addTags ts =
     Action
     { _aDescription = "add given tags"
-    , _aAction = (\s -> liftIO . selectedMailHelper s $ \m -> applyMailTags m ts Notmuch.addTags s)
+    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.addTags s)
     }
 
 removeTags :: [Text] -> Action ctx AppState
 removeTags ts =
     Action
     { _aDescription = "remove given tags"
-    , _aAction = (\s -> liftIO . selectedMailHelper s $ \m -> applyMailTags m ts Notmuch.removeTags s)
+    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.removeTags s)
     }
 
-reloadMails :: Action 'BrowseMail AppState
-reloadMails = Action "reload list of mails" applySearch
+reloadList :: Action 'BrowseThreads AppState
+reloadList = Action "reload list of threads" applySearch
 
 -- Function definitions for actions
 --
 applySearch :: AppState -> T.EventM Name AppState
-applySearch s =
-   runExceptT (Notmuch.getMessages searchterms (view (asConfig . confNotmuch) s))
-   >>= pure . ($ s) . either setError updateMailsList
-     where searchterms = currentLine $ view (asMailIndex . miSearchEditor . E.editContentsL) s
+applySearch s = runExceptT (Notmuch.getThreads searchterms (view (asConfig . confNotmuch) s))
+                >>= pure . ($ s) . either setError (updateList)
+   where searchterms = currentLine $ view (asMailIndex . miSearchEditor . E.editContentsL) s
+         updateList vec s' =
+           let current = view (asMailIndex . miListOfThreads . L.listSelectedL) s' <|> Just 0
+           in over (asMailIndex . miListOfThreads) (L.listReplace vec current) s'
 
-selectedMailHelper
+setMailsForThread :: AppState -> IO AppState
+setMailsForThread s = selectedItemHelper (asMailIndex . miListOfThreads) s $ \t ->
+  let dbpath = view (asConfig . confNotmuch . nmDatabase) s
+      updateThreadMails vec = over (asMailIndex . miListOfMails) (L.listReplace vec (Just 0))
+  in either setError updateThreadMails <$> runExceptT (Notmuch.getThreadMessages dbpath t)
+
+selectedItemHelper
     :: Applicative f
-    => AppState -> (NotmuchMail -> f (AppState -> AppState)) -> f AppState
-selectedMailHelper s func =
-  ($ s) <$> case L.listSelectedElement (view (asMailIndex . miListOfMails) s) of
+    => Getting (L.List n t) AppState (L.List n t)
+    -> AppState
+    -> (t -> f (AppState -> AppState))
+    -> f AppState
+selectedItemHelper l s func =
+  ($ s) <$> case L.listSelectedElement (view l s) of
   Just (_, m) -> func m
-  Nothing -> pure $ setError (GenericError "No mail selected.")
+  Nothing -> pure $ setError (GenericError "No item selected.")
 
 applyMailTags
     :: MonadIO f
@@ -324,7 +354,7 @@ applyMailTags m ts op s = let dbpath = view (asConfig . confNotmuch . nmDatabase
   in either setError updateMailInList <$> runExceptT (Notmuch.setNotmuchMailTags dbpath (op m ts))
 
 applyEditorMailTags :: AppState -> IO AppState
-applyEditorMailTags s = selectedMailHelper s $ \m ->
+applyEditorMailTags s = selectedItemHelper (asMailIndex . miListOfMails) s $ \m ->
   let contents = (unlines $ E.getEditContents $ view (asMailIndex . miSearchEditor) s)
       tags = strip <$> splitOn "," contents
   in applyMailTags m tags Notmuch.setTags s
@@ -335,14 +365,14 @@ restoreNMSearch s =
   in pure $ set (asMailIndex . miSearchEditor . E.editContentsL) z s
 
 updateStateWithParsedMail :: AppState -> IO AppState
-updateStateWithParsedMail s = selectedMailHelper s $ \m ->
+updateStateWithParsedMail s = selectedItemHelper (asMailIndex . miListOfMails) s $ \m ->
         either
             (\e -> setError e . set asAppMode BrowseMail)
             (\pmail -> set (asMailView . mvMail) (Just pmail) . set asAppMode ViewMail)
             <$> runExceptT (parseMail m (view (asConfig . confNotmuch . nmDatabase) s))
 
 updateReadState :: (NotmuchMail -> [Text] -> NotmuchMail) -> AppState -> IO AppState
-updateReadState op s = selectedMailHelper s $ \m ->
+updateReadState op s = selectedItemHelper (asMailIndex . miListOfMails)s $ \m ->
             let newTag = view (asConfig . confNotmuch . nmNewTag) s
                 dbpath = view (asConfig . confNotmuch . nmDatabase) s
             in either setError updateMailInList
@@ -355,11 +385,6 @@ updateMailInList m s =
 
 setError :: Error -> AppState -> AppState
 setError = set asError . Just
-
-updateMailsList :: Vector NotmuchMail -> AppState -> AppState
-updateMailsList vec s =
-    let current = view (asMailIndex . miListOfMails . L.listSelectedL) s <|> Just 0
-    in over (asMailIndex . miListOfMails) (L.listReplace vec current) s
 
 mailIndexEvent
     :: (L.List Name NotmuchMail -> L.List Name NotmuchMail)

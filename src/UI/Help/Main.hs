@@ -16,7 +16,8 @@ import UI.Keybindings (handleEvent)
 import Types
 
 drawHelp :: AppState -> [Widget Name]
-drawHelp s = let tweak = views (asConfig . confIndexView . ivKeybindings) (renderKbGroup BrowseMail) s
+drawHelp s = let tweak = views (asConfig . confIndexView . ivKeybindings) (renderKbGroup BrowseThreads) s
+                         <=> views (asConfig . confIndexView . ivMailsKeybindings) (renderKbGroup BrowseMail) s
                          <=> views (asConfig . confIndexView . ivSearchKeybindings) (renderKbGroup SearchMail) s
                          <=> views (asConfig . confMailView . mvIndexKeybindings) (renderKbGroup ViewMail) s
                          <=> views (asConfig . confMailView . mvKeybindings) (renderKbGroup ViewMail) s
@@ -36,7 +37,8 @@ renderKeybinding kb = let keys = view kbEvent kb
                          <+> padLeft (Pad 3) (str actions)
 
 modeTitle :: Mode -> Text
-modeTitle BrowseMail = "Index of Mails"
+modeTitle BrowseThreads = "List of Threads"
+modeTitle BrowseMail = "Thread mails"
 modeTitle SearchMail = "Search Editor"
 modeTitle ViewMail = "Mail Viewer"
 modeTitle ComposeEditor = "Editor to Compose a new Mail"

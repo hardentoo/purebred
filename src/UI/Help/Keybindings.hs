@@ -3,9 +3,15 @@
 module UI.Help.Keybindings where
 
 import qualified Brick.Types as Brick
+import Graphics.Vty (Event (..), Key (..))
 import UI.Keybindings
+import UI.Actions
 import Types
 
 -- | Default Keybindings
 helpKeybindings :: [Keybinding 'Help (Brick.Next AppState)]
-helpKeybindings = scrollableKeybindings
+helpKeybindings =
+    [ Keybinding (EvKey KEsc []) (noop `chain'` (focus :: Action 'BrowseThreads AppState) `chain` continue)
+    , Keybinding (EvKey KBS []) (scrollUp `chain` continue)
+    , Keybinding (EvKey (KChar ' ') []) (scrollDown `chain` continue)
+    ]

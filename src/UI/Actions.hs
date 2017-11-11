@@ -7,7 +7,6 @@
 
 module UI.Actions (
   Scrollable(..)
-  , backToIndex
   , quit
   , focus
   , done
@@ -19,7 +18,6 @@ module UI.Actions (
   , mailIndexUp
   , mailIndexDown
   , switchComposeEditor
-  , composeMail
   , replyMail
   , scrollUp
   , scrollDown
@@ -28,7 +26,6 @@ module UI.Actions (
   , continue
   , chain
   , chain'
-  , viewHelp
   , setTags
   , addTags
   , removeTags
@@ -75,9 +72,13 @@ instance ModeTransition s s where
 
 instance ModeTransition 'ManageTags 'BrowseMail where
 
+instance ModeTransition 'ManageTags 'BrowseThreads where
+
 instance ModeTransition 'BrowseThreads 'SearchMail where
 
 instance ModeTransition 'BrowseMail 'ManageTags where
+
+instance ModeTransition 'BrowseThreads 'ManageTags where
 
 instance ModeTransition 'ViewMail 'BrowseMail where
 
@@ -86,6 +87,18 @@ instance ModeTransition 'BrowseThreads 'BrowseMail where
 instance ModeTransition 'BrowseMail 'BrowseThreads  where
 
 instance ModeTransition 'SearchMail 'BrowseThreads  where
+
+instance ModeTransition 'BrowseThreads 'GatherHeaders where
+
+instance ModeTransition 'BrowseMail 'GatherHeaders where
+
+instance ModeTransition 'GatherHeaders 'BrowseThreads where
+
+instance ModeTransition 'ComposeEditor 'BrowseThreads where
+
+instance ModeTransition 'Help 'BrowseThreads where
+
+instance ModeTransition s 'Help where  -- help can be reached from any mode
 
 -- | An action - typically completed by a key press (e.g. Enter) - and it's
 -- contents are used to be applied to an action.
@@ -144,6 +157,12 @@ instance Focusable 'BrowseMail where
 instance Focusable 'BrowseThreads where
   switchFocus _ = pure . set asAppMode BrowseThreads
 
+instance Focusable 'GatherHeaders where
+  switchFocus _ = pure . set asAppMode GatherHeaders
+
+instance Focusable 'Help where
+  switchFocus _ = pure . set asAppMode Help
+
 -- | Problem: How to chain actions, which operate not on the same mode, but a
 -- mode switched by the previous action?
 class HasMode (a :: Mode) where
@@ -164,6 +183,12 @@ instance HasMode 'ManageTags where
 
 instance HasMode 'BrowseThreads where
   mode _ = BrowseThreads
+
+instance HasMode 'GatherHeaders where
+  mode _ = GatherHeaders
+
+instance HasMode 'Help where
+  mode _ = Help
 
 quit :: Action ctx (T.Next AppState)
 quit = Action "quit the application" Brick.halt
@@ -201,16 +226,6 @@ focus = Action ("switch mode to " <> show (mode (Proxy :: Proxy a))) (switchFocu
 noop :: Action ctx AppState
 noop = Action "" pure
 
-backToIndex :: Action ctx AppState
-backToIndex =
-    Action
-    { _aDescription = "back to the index"
-    , _aAction = pure . set asAppMode BrowseMail
-    }
-
-viewHelp :: Action ctx AppState
-viewHelp = Action "view all key bindings" (pure . set asAppMode Help)
-
 scrollUp :: forall ctx. (Scrollable ctx) => Action ctx AppState
 scrollUp = Action
   { _aDescription = "scrolling up"
@@ -222,13 +237,6 @@ scrollDown = Action
   { _aDescription = "scrolling down"
   , _aAction = (\s -> Brick.vScrollPage (makeViewportScroller (Proxy :: Proxy ctx)) T.Down >> pure s)
   }
-
-composeMail :: Action 'BrowseMail AppState
-composeMail =
-    Action
-    { _aDescription = "compose a new mail"
-    , _aAction = pure . set asAppMode GatherHeaders
-    }
 
 displayMail :: Action ctx AppState
 displayMail =
@@ -265,7 +273,7 @@ mailIndexDown =
     , _aAction = mailIndexEvent L.listMoveDown
     }
 
-switchComposeEditor :: Action 'BrowseMail AppState
+switchComposeEditor :: Action 'BrowseThreads AppState
 switchComposeEditor =
     Action
     { _aDescription = "switch to compose editor"

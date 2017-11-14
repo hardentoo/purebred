@@ -30,6 +30,7 @@ module UI.Actions (
   , addTags
   , removeTags
   , reloadList
+  , selectNextUnread
   ) where
 
 import qualified Brick.Main as Brick
@@ -42,9 +43,11 @@ import Data.Proxy
 import Data.Semigroup ((<>))
 import Data.Text (splitOn, strip, intercalate, unlines, Text)
 import Data.Text.Lazy.IO (readFile)
+import qualified Data.Vector as Vector
 import Prelude hiding (readFile, unlines)
 import Control.Applicative ((<|>))
 import Control.Lens (set, over, view, _Just, (&), Getting)
+import Data.Maybe (fromJust)
 import Control.Lens.Fold ((^?!))
 import Control.Monad ((>=>))
 import Control.Monad.Except (runExceptT)
@@ -52,7 +55,7 @@ import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Text.Zipper (currentLine, gotoEOL, textZipper)
 import qualified Storage.Notmuch as Notmuch
        (getThreadMessages, getThreads, addTags, setTags, removeTags,
-        ManageTags(..))
+        ManageTags(..), mailIsNew)
 import Storage.ParsedMail (parseMail, getTo, getFrom, getSubject)
 import Types
 import Error
@@ -342,13 +345,25 @@ removeTags ts =
 reloadList :: Action 'BrowseThreads AppState
 reloadList = Action "reload list of threads" applySearch
 
+selectNextUnread :: Action 'BrowseThreads AppState
+selectNextUnread = Action "select next unread" (\s -> pure $ selectNextUnread' (view (asMailIndex . miListOfMails) s) (view (asMailIndex . miListOfMails . L.listElementsL) s) s)
+
 -- Function definitions for actions
 --
+selectNextUnread'
+    :: (BrickList a, Notmuch.ManageTags a)
+    => L.List Name a -> Vector.Vector a -> AppState -> AppState
+selectNextUnread' l vec s =
+  let cur = (fst <$> selected l) <|> Just 0
+      f m = Notmuch.mailIsNew (view (asConfig . confNotmuch . nmNewTag) s) (Notmuch.getTags m)
+      next = Vector.findIndex f (Vector.drop ((fromJust cur) + 1) vec) <|> cur
+  in maybe s (\x -> updateList (\_ -> L.listMoveTo x l) s) next
+
 applySearch :: AppState -> T.EventM Name AppState
 applySearch s = runExceptT (Notmuch.getThreads searchterms (view (asConfig . confNotmuch) s))
-                >>= pure . ($ s) . either setError (updateList)
+                >>= pure . ($ s) . either setError (updateList')
    where searchterms = currentLine $ view (asMailIndex . miSearchEditor . E.editContentsL) s
-         updateList vec s' =
+         updateList' vec s' =
            let current = view (asMailIndex . miListOfThreads . L.listSelectedL) s' <|> Just 0
            in over (asMailIndex . miListOfThreads) (L.listReplace vec current) s'
 
@@ -368,6 +383,14 @@ selectedItemHelper l s func =
   ($ s) <$> case L.listSelectedElement (view l s) of
   Just (_, m) -> func m
   Nothing -> pure $ setError (GenericError "No item selected.")
+
+class BrickList a where
+  updateList :: (L.List Name a -> L.List Name a) -> AppState -> AppState
+  selected :: L.List Name a -> Maybe (Int, a)
+
+instance BrickList NotmuchMail where
+  updateList = over (asMailIndex . miListOfMails)
+  selected = L.listSelectedElement
 
 class ListItemSetter a where
   updateListItem :: a -> AppState -> AppState

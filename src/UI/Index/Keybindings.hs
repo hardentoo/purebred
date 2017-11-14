@@ -24,7 +24,7 @@ indexKeybindings =
 threadKeybindings :: [Keybinding 'BrowseThreads (Brick.Next AppState)]
 threadKeybindings =
     [ Keybinding (V.EvKey V.KEsc []) quit
-    , Keybinding (V.EvKey V.KEnter []) (displayThreadMails `chain'` (focus :: Action 'BrowseMail AppState) `chain` continue)
+    , Keybinding (V.EvKey V.KEnter []) (displayThreadMails `chain'` (focus :: Action 'BrowseMail AppState) `chain` selectNextUnread `chain` displayMail `chain` continue)
     , Keybinding (V.EvKey (V.KChar ':') []) (noop `chain'` (focus :: Action 'SearchMail AppState) `chain` continue)
     , Keybinding (V.EvKey (V.KChar '\t') []) (switchComposeEditor `chain` continue)
     , Keybinding (V.EvKey (V.KChar 'm') []) (noop `chain'` (focus :: Action 'GatherHeaders AppState) `chain` continue)

@@ -30,6 +30,7 @@ module UI.Actions (
   , addTags
   , removeTags
   , reloadList
+  , selectNextUnread
   ) where
 
 import qualified Brick.Main as Brick
@@ -42,6 +43,7 @@ import Data.Proxy
 import Data.Semigroup ((<>))
 import Data.Text (splitOn, strip, intercalate, unlines, Text)
 import Data.Text.Lazy.IO (readFile)
+import qualified Data.Vector as Vector
 import Prelude hiding (readFile, unlines)
 import Control.Applicative ((<|>))
 import Control.Lens (set, over, view, _Just, (&), Getting)
@@ -51,7 +53,8 @@ import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Text.Zipper (currentLine, gotoEOL, textZipper)
 import qualified Storage.Notmuch as Notmuch
-       (getThreadMessages, getThreads, addTags, setTags, removeTags, setNotmuchMailTags)
+       (getThreadMessages, getThreads, addTags, setTags, removeTags,
+        setNotmuchMailTags, mailIsNew)
 import Storage.ParsedMail (parseMail, getTo, getFrom, getSubject)
 import Types
 import Error
@@ -324,8 +327,18 @@ removeTags ts =
 reloadList :: Action 'BrowseThreads AppState
 reloadList = Action "reload list of threads" applySearch
 
+selectNextUnread :: Action 'BrowseThreads AppState
+selectNextUnread = Action "select next undread" selectNextUnread'
+
 -- Function definitions for actions
 --
+selectNextUnread' :: AppState -> T.EventM Name AppState
+selectNextUnread' s = let cur = maybe 0 id (view (asMailIndex . miListOfMails . L.listSelectedL) s <|> Just 0)
+                          vec = view (asMailIndex . miListOfMails . L.listElementsL) s
+                          f m = Notmuch.mailIsNew (view (asConfig . confNotmuch . nmNewTag) s) (view mailTags m)
+                          next = Vector.findIndex f (Vector.drop (cur + 1) vec) <|> (view (asMailIndex . miListOfMails . L.listSelectedL) s)
+                      in pure $ maybe s (\x -> over (asMailIndex . miListOfMails) (L.listMoveTo x) s) next
+
 applySearch :: AppState -> T.EventM Name AppState
 applySearch s = runExceptT (Notmuch.getThreads searchterms (view (asConfig . confNotmuch) s))
                 >>= pure . ($ s) . either setError (updateList)

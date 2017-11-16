@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
 
@@ -6,7 +7,7 @@ module Types where
 
 import Codec.MIME.Type (MIMEValue)
 import qualified Brick.AttrMap             as Brick
-import Brick.Types (EventM, Next)
+import Brick.Types (EventM, Next, Widget)
 import qualified Brick.Widgets.Edit        as E
 import qualified Brick.Widgets.List        as L
 import           Control.Lens
@@ -160,44 +161,44 @@ confHelpView :: Getter (Configuration a b) HelpViewSettings
 confHelpView = to (\(Configuration _ _ _ _ _ _ h) -> h)
 
 newtype ComposeViewSettings = ComposeViewSettings
-    { _cvKeybindings :: [Keybinding 'ComposeEditor (Next AppState)]
+    { _cvKeybindings :: [Keybinding 'ComposeEditor (Next AppState) (E.Editor Name T.Text)]
     }
 
-cvKeybindings :: Lens' ComposeViewSettings [Keybinding 'ComposeEditor (Next AppState)]
+cvKeybindings :: Lens' ComposeViewSettings [Keybinding 'ComposeEditor (Next AppState) (E.Editor Name T.Text)]
 cvKeybindings f (ComposeViewSettings a) = fmap (\a' -> ComposeViewSettings a') (f a)
 
 newtype HelpViewSettings = HelpViewSettings
-  { _hvKeybindings :: [Keybinding 'Help (Next AppState)]
+  { _hvKeybindings :: [Keybinding 'Help (Next AppState) (Widget Name)]
   }
 
-hvKeybindings :: Lens' HelpViewSettings [Keybinding 'Help (Next AppState)]
+hvKeybindings :: Lens' HelpViewSettings [Keybinding 'Help (Next AppState) (Widget Name)]
 hvKeybindings f (HelpViewSettings a) = fmap (\a' -> HelpViewSettings a') (f a)
 
 data IndexViewSettings = IndexViewSettings
-    { _ivKeybindings :: [Keybinding 'BrowseThreads (Next AppState)]
-    , _ivMailsKeybindings :: [Keybinding 'BrowseMail (Next AppState)]
-    , _ivSearchKeybindings :: [Keybinding 'SearchMail (Next AppState)]
-    , _ivManageTagsKeybindings :: [Keybinding 'ManageTags (Next AppState)]
+    { _ivKeybindings :: [Keybinding 'BrowseThreads (Next AppState) (L.List Name NotmuchThread)]
+    , _ivMailsKeybindings :: [Keybinding 'BrowseMail (Next AppState) (L.List Name NotmuchMail)]
+    , _ivSearchKeybindings :: [Keybinding 'SearchMail (Next AppState) (E.Editor Name T.Text)]
+    , _ivManageTagsKeybindings :: [Keybinding 'ManageTags (Next AppState) (E.Editor Name T.Text)]
     }
 
-ivKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseThreads (Next AppState)]
+ivKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseThreads (Next AppState) (L.List Name NotmuchThread)]
 ivKeybindings f (IndexViewSettings a b c d) = fmap (\a' -> IndexViewSettings a' b c d) (f a)
 
-ivMailsKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseMail (Next AppState)]
+ivMailsKeybindings :: Lens' IndexViewSettings [Keybinding 'BrowseMail (Next AppState) (L.List Name NotmuchMail)]
 ivMailsKeybindings f (IndexViewSettings a b c d) = fmap (\b' -> IndexViewSettings a b' c d) (f b)
 
-ivSearchKeybindings :: Lens' IndexViewSettings [Keybinding 'SearchMail (Next AppState)]
+ivSearchKeybindings :: Lens' IndexViewSettings [Keybinding 'SearchMail (Next AppState) (E.Editor Name T.Text)]
 ivSearchKeybindings f (IndexViewSettings a b c d) = fmap (\c' -> IndexViewSettings a b c' d) (f c)
 
-ivManageTagsKeybindings :: Lens' IndexViewSettings [Keybinding 'ManageTags (Next AppState)]
+ivManageTagsKeybindings :: Lens' IndexViewSettings [Keybinding 'ManageTags (Next AppState) (E.Editor Name T.Text)]
 ivManageTagsKeybindings f (IndexViewSettings a b c d) = fmap (\d' -> IndexViewSettings a b c d') (f d)
 
 data MailViewSettings = MailViewSettings
     { _mvIndexRows           :: Int
     , _mvPreferedContentType :: T.Text
     , _mvHeadersToShow       :: CI.CI T.Text -> Bool
-    , _mvKeybindings         :: [Keybinding 'ViewMail (Next AppState)]
-    , _mvIndexKeybindings    :: [Keybinding 'BrowseMail (Next AppState)]
+    , _mvKeybindings         :: [Keybinding 'ViewMail (Next AppState) (Widget Name)]
+    , _mvIndexKeybindings    :: [Keybinding 'BrowseMail (Next AppState) (L.List Name NotmuchMail)]
     }
 
 mvIndexRows :: Lens' MailViewSettings Int
@@ -209,10 +210,10 @@ mvPreferredContentType f (MailViewSettings a b c d e) = fmap (\b' -> MailViewSet
 mvHeadersToShow :: Getter MailViewSettings (CI.CI T.Text -> Bool)
 mvHeadersToShow = to (\(MailViewSettings _ _ h _ _) -> h)
 
-mvKeybindings :: Lens' MailViewSettings [Keybinding 'ViewMail (Next AppState)]
+mvKeybindings :: Lens' MailViewSettings [Keybinding 'ViewMail (Next AppState) (Widget Name)]
 mvKeybindings f (MailViewSettings a b c d e) = fmap (\d' -> MailViewSettings a b c d' e) (f d)
 
-mvIndexKeybindings :: Lens' MailViewSettings [Keybinding 'BrowseMail (Next AppState)]
+mvIndexKeybindings :: Lens' MailViewSettings [Keybinding 'BrowseMail (Next AppState) (L.List Name NotmuchMail)]
 mvIndexKeybindings f (MailViewSettings a b c d e) = fmap (\e' -> MailViewSettings a b c d e') (f e)
 
 -- | Overall application state
@@ -243,30 +244,37 @@ asAppMode f (AppState a b c d e g) = fmap (\e' -> AppState a b c d e' g) (f e)
 asError :: Lens' AppState (Maybe Error)
 asError f (AppState a b c d e g) = fmap (\g' -> AppState a b c d e g') (f g)
 
-data Action (ctx :: Mode) a = Action
+
+data View (m :: Mode) a = View {widgetL :: Lens' AppState a}
+
+data Action (ctx :: Mode) a b = Action
     { _aDescription :: String
     , _aAction :: AppState -> EventM Name a
+    , _aView :: View ctx b
     }
 
-aAction :: Getter (Action ctx a) (AppState -> EventM Name a)
-aAction = to (\(Action _ b) -> b)
+aAction :: Getter (Action ctx a b) (AppState -> EventM Name a)
+aAction = to (\(Action _ b _) -> b)
 
-data Keybinding (ctx :: Mode) a = Keybinding
+aDescription :: Getter (Action ctx a b) String
+aDescription = to (\(Action a _ _ ) -> a)
+
+aView :: Getter (Action ctx a b) (View ctx b)
+aView = to (\(Action _ _ c) -> c)
+
+data Keybinding (ctx :: Mode) a b = Keybinding
     { _kbEvent :: Vty.Event
-    , _kbAction :: Action ctx a
+    , _kbAction :: Action ctx a b
     }
-instance Eq (Keybinding ctx a) where
+instance Eq (Keybinding ctx a b) where
   (==) (Keybinding a _) (Keybinding b _) = a == b
   (/=) (Keybinding a _) (Keybinding b _) = a /= b
 
-kbEvent :: Getter (Keybinding ctx a) Vty.Event
+kbEvent :: Getter (Keybinding ctx a b) Vty.Event
 kbEvent = to (\(Keybinding b _) -> b)
 
-kbAction :: Getter (Keybinding ctx a) (Action ctx a)
+kbAction :: Getter (Keybinding ctx a b) (Action ctx a b)
 kbAction = to (\(Keybinding _ c) -> c)
-
-aDescription :: Getter (Action ctx a) String
-aDescription = to (\(Action a _ ) -> a)
 
 type Body = T.Text
 type Header = T.Text

@@ -68,6 +68,15 @@ instance Scrollable 'ViewMail where
 instance Scrollable 'Help where
   makeViewportScroller _ = Brick.viewportScroll ScrollingHelpView
 
+browserview :: View 'BrowseMail NotmuchMail
+browserview = View { widgetL = (asMailIndex . miListOfMails) }
+
+threadview :: View 'BrowseThreads NotmuchThread
+threadview = View { widgetL = (asMailIndex . miListOfThreads) }
+
+class HasView (a :: Mode) b where
+  getview :: Proxy a -> View a b
+
 
 class ModeTransition (s :: Mode) (d :: Mode) where
 
@@ -193,90 +202,93 @@ instance HasMode 'GatherHeaders where
 instance HasMode 'Help where
   mode _ = Help
 
-quit :: Action ctx (T.Next AppState)
-quit = Action "quit the application" Brick.halt
+noopView :: View m AppState
+noopView = View id
 
-continue :: Action ctx (T.Next AppState)
-continue = Action "" Brick.continue
+quit :: Action ctx (T.Next AppState) AppState
+quit = Action "quit the application" Brick.halt noopView
 
-chain :: Action ctx AppState -> Action ctx a -> Action ctx a
-chain (Action d1 f1) (Action d2 f2) =
-  Action (if null d2 then d1 else d1 <> " and then " <> d2) (f1 >=> f2)
+continue :: Action ctx (T.Next AppState) AppState
+continue = Action "" Brick.continue noopView
+
+chain :: Action ctx AppState b -> Action ctx a b -> Action ctx a b
+chain (Action d1 f1 w) (Action d2 f2 _) =
+  Action (if null d2 then d1 else d1 <> " and then " <> d2) (f1 >=> f2) w
 
 chain'
-    :: forall ctx ctx' a.
+    :: forall ctx ctx' a b.
        (HasMode ctx', ModeTransition ctx ctx')
-    => Action ctx AppState
-    -> Action ctx' a
-    -> Action ctx a
+    => Action ctx AppState b
+    -> Action ctx' a b
+    -> Action ctx a b
 chain' (Action d1 f1) (Action d2 f2) =
   Action (if null d2 then d1 else d1 <> " and then " <> d2) (f1 >=> switchMode >=> f2)
   where
     switchMode = pure . set asAppMode (mode (Proxy :: Proxy ctx'))
 
-done :: forall a. Completable a => Action a AppState
+done :: forall a b. Completable a => Action a AppState b
 done = Action "apply" (complete (Proxy :: Proxy a))
 
-abort :: forall a. Resetable a => Action a AppState
+abort :: forall a b. Resetable a => Action a AppState b
 abort = Action "cancel" (reset (Proxy :: Proxy a))
 
-focus :: forall a. (HasMode a, Focusable a) => Action a AppState
+focus :: forall a b. (HasMode a, Focusable a) => Action a AppState b
 focus = Action ("switch mode to " <> show (mode (Proxy :: Proxy a))) (switchFocus (Proxy :: Proxy a))
 
 -- | A no-op action which just returns the current AppState
 -- This action can be used at the start of an Action chain where an immediate
 -- mode switch is required
-noop :: Action ctx AppState
+noop :: Action ctx AppState a
 noop = Action "" pure
 
-scrollUp :: forall ctx. (Scrollable ctx) => Action ctx AppState
+scrollUp :: forall ctx. (Scrollable ctx) => Action ctx AppState (T.Widget Name)
 scrollUp = Action
   { _aDescription = "scrolling up"
   , _aAction = (\s -> Brick.vScrollPage (makeViewportScroller (Proxy :: Proxy ctx)) T.Up >> pure s)
   }
 
-scrollDown :: forall ctx. (Scrollable ctx) => Action ctx AppState
+scrollDown :: forall ctx. (Scrollable ctx) => Action ctx AppState (T.Widget Name)
 scrollDown = Action
   { _aDescription = "scrolling down"
   , _aAction = (\s -> Brick.vScrollPage (makeViewportScroller (Proxy :: Proxy ctx)) T.Down >> pure s)
   }
 
-displayMail :: Action ctx AppState
+displayMail :: Action 'BrowseMail AppState (L.List Name NotmuchMail)
 displayMail =
     Action
     { _aDescription = "display an e-mail"
     , _aAction = \s -> liftIO $ updateStateWithParsedMail s >>= updateReadState Notmuch.removeTags
     }
 
-displayThreadMails :: Action 'BrowseThreads AppState
+displayThreadMails :: forall ctx a. HasView ctx a => Action ctx AppState a
 displayThreadMails =
     Action
     { _aDescription = "display an e-mail for threads"
     , _aAction = liftIO . setMailsForThread
     }
 
-setUnread :: Action 'BrowseMail AppState
+setUnread :: forall ctx a. HasView ctx a => Action ctx AppState a
 setUnread =
     Action
     { _aDescription = "toggle unread"
     , _aAction = (liftIO . updateReadState Notmuch.addTags)
     }
 
-mailIndexUp :: Action 'BrowseMail AppState
+mailIndexUp :: forall ctx a. HasView ctx a => Action ctx AppState a
 mailIndexUp =
     Action
     { _aDescription = "mail index up one e-mail"
     , _aAction = mailIndexEvent L.listMoveUp
     }
 
-mailIndexDown :: Action 'BrowseMail AppState
+mailIndexDown :: forall ctx a. HasView ctx a => Action ctx AppState a
 mailIndexDown =
     Action
     { _aDescription = "mail index down one e-mail"
     , _aAction = mailIndexEvent L.listMoveDown
     }
 
-switchComposeEditor :: Action 'BrowseThreads AppState
+switchComposeEditor :: forall ctx a. HasView ctx a => Action ctx AppState a
 switchComposeEditor =
     Action
     { _aDescription = "switch to compose editor"
@@ -285,14 +297,14 @@ switchComposeEditor =
                           Nothing -> pure s
     }
 
-replyMail :: Action 'BrowseMail AppState
+replyMail :: forall ctx a. HasView ctx a => Action ctx AppState a
 replyMail =
     Action
     { _aDescription = "reply to an e-mail"
     , _aAction = replyToMail
     }
 
-toggleHeaders :: Action 'ViewMail AppState
+toggleHeaders :: Action 'ViewMail AppState (T.Widget Name)
 toggleHeaders = Action
   { _aDescription = "toggle mail headers"
   , _aAction = pure . go
@@ -303,41 +315,42 @@ toggleHeaders = Action
       Filtered -> set (asMailView . mvHeadersState) ShowAll s
       ShowAll -> set (asMailView . mvHeadersState) Filtered s
 
-setTags :: [Text] -> Action ctx AppState
+setTags :: forall ctx a. HasView ctx a => [Text] -> Action ctx AppState a
 setTags ts =
     Action
     { _aDescription = "apply given tags"
     , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.setTags s)
     }
 
-addTags :: [Text] -> Action ctx AppState
+addTags :: forall ctx a. HasView ctx a => [Text] -> Action ctx AppState a
 addTags ts =
     Action
     { _aDescription = "add given tags"
     , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.addTags s)
     }
 
-removeTags :: [Text] -> Action ctx AppState
+removeTags :: forall ctx a. HasView ctx a => [Text] -> Action ctx AppState a
 removeTags ts =
     Action
     { _aDescription = "remove given tags"
     , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.removeTags s)
     }
 
-reloadList :: Action 'BrowseThreads AppState
+reloadList :: forall m a. HasView m a => Action m AppState a
 reloadList = Action "reload list of threads" applySearch
 
-selectNextUnread :: Action 'BrowseThreads AppState
-selectNextUnread = Action "select next undread" selectNextUnread'
+selectNextUnread :: forall m a. HasView m a => Action m AppState a
+selectNextUnread = Action "select next undread" (selectNextUnread' getview)
 
 -- Function definitions for actions
 --
-selectNextUnread' :: AppState -> T.EventM Name AppState
-selectNextUnread' s = let cur = maybe 0 id (view (asMailIndex . miListOfMails . L.listSelectedL) s <|> Just 0)
-                          vec = view (asMailIndex . miListOfMails . L.listElementsL) s
-                          f m = Notmuch.mailIsNew (view (asConfig . confNotmuch . nmNewTag) s) (view mailTags m)
-                          next = Vector.findIndex f (Vector.drop (cur + 1) vec) <|> (view (asMailIndex . miListOfMails . L.listSelectedL) s)
-                      in pure $ maybe s (\x -> over (asMailIndex . miListOfMails) (L.listMoveTo x) s) next
+selectNextUnread' :: View a b -> AppState -> T.EventM Name AppState
+selectNextUnread' v s =
+  let cur = maybe 0 id (view ((widgetL v) . L.listSelectedL) s <|> Just 0)
+      vec = view ((widgetL v) . L.listElementsL) s
+      f m = Notmuch.mailIsNew (view (asConfig . confNotmuch . nmNewTag) s) (view mailTags m)
+      next = Vector.findIndex f (Vector.drop (cur + 1) vec)
+  in pure $ maybe s (\x -> over (widgetL v) (L.listMoveTo x) s) next
 
 applySearch :: AppState -> T.EventM Name AppState
 applySearch s = runExceptT (Notmuch.getThreads searchterms (view (asConfig . confNotmuch) s))

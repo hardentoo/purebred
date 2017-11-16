@@ -6,7 +6,7 @@
 module Storage.Notmuch where
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Control.Monad.Except (MonadError, throwError)
+import Control.Monad.Except (void, MonadError, throwError)
 import qualified Data.ByteString as B
 import Data.Traversable (traverse)
 import Data.List (union, notElem)
@@ -81,15 +81,26 @@ setNotmuchMailTags
   -> NotmuchMail
   -> m NotmuchMail
 setNotmuchMailTags dbpath m = do
-  nmtags <- mailTagsToNotmuchTags m
-  bracketT (databaseOpen dbpath) databaseDestroy (tagsToMessage nmtags m)
+  nmtags <- toNotmuchTags (view mailTags m)
+  bracketT (databaseOpen dbpath) databaseDestroy (tagsToMessage nmtags (view mailId m))
   pure m
 
+setNotmuchThreadTags
+  :: (MonadError Error m, MonadIO m)
+  => FilePath
+  -> NotmuchThread
+  -> m NotmuchThread
+setNotmuchThreadTags dbpath t = do
+  tgs <- toNotmuchTags (view thTags t)
+  mgs <- getThreadMessages dbpath t
+  void $ bracketT (databaseOpen dbpath) databaseDestroy (go tgs mgs)
+  pure t
+    where go xs msgs db = traverse (\x -> tagsToMessage xs (view mailId x) db) msgs
 
 tagsToMessage
   :: (MonadError Error m, MonadIO m)
-  => [Tag] -> NotmuchMail -> Database RW -> m ()
-tagsToMessage xs msg db = getMessage db (view mailId msg) >>= messageSetTags xs
+  => [Tag] -> B.ByteString -> Database RW -> m ()
+tagsToMessage xs id' db = getMessage db id' >>= messageSetTags xs
 
 -- | Get message by message ID, throwing MessageNotFound if not found
 --
@@ -100,17 +111,29 @@ getMessage db msgId =
   findMessage db msgId
   >>= maybe (throwError (MessageNotFound msgId)) pure
 
-setTags :: NotmuchMail -> [T.Text] -> NotmuchMail
-setTags m ts = set mailTags ts m
+class ManageTags a where
+  setTags :: a -> [T.Text] -> a
+  addTags :: a -> [T.Text] -> a
+  removeTags :: a -> [T.Text] -> a
+  getTags :: a -> [T.Text]
+  writeToNotmuch :: (MonadError Error m, MonadIO m) => FilePath -> a -> m a
 
-addTags :: NotmuchMail -> [T.Text] -> NotmuchMail
-addTags m ts = over mailTags (`union` ts) m
+instance ManageTags NotmuchMail where
+  setTags m ts = set mailTags ts m
+  addTags m ts = over mailTags (`union` ts) m
+  removeTags m ts = over mailTags (filter (`notElem` ts)) m
+  getTags = view mailTags
+  writeToNotmuch = setNotmuchMailTags
 
-removeTags :: NotmuchMail -> [T.Text] -> NotmuchMail
-removeTags m ts = over mailTags (filter (`notElem` ts)) m
+instance ManageTags NotmuchThread where
+  setTags m ts = set thTags ts m
+  addTags m ts = over thTags (`union` ts) m
+  removeTags m ts = over thTags (filter (`notElem` ts)) m
+  getTags = view thTags
+  writeToNotmuch = setNotmuchThreadTags
 
-mailTagsToNotmuchTags :: MonadError Error m => NotmuchMail -> m [Tag]
-mailTagsToNotmuchTags = traverse (mkTag' . encodeUtf8) . view mailTags
+toNotmuchTags :: MonadError Error m => [T.Text] -> m [Tag]
+toNotmuchTags = traverse (mkTag' . encodeUtf8)
   where mkTag' s = maybe (throwError (InvalidTag s)) pure $ mkTag s
 
 messageToMail

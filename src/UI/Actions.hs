@@ -51,7 +51,8 @@ import Control.Monad.Except (runExceptT)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Data.Text.Zipper (currentLine, gotoEOL, textZipper)
 import qualified Storage.Notmuch as Notmuch
-       (getThreadMessages, getThreads, addTags, setTags, removeTags, setNotmuchMailTags)
+       (getThreadMessages, getThreads, addTags, setTags, removeTags,
+        ManageTags(..))
 import Storage.ParsedMail (parseMail, getTo, getFrom, getSubject)
 import Types
 import Error
@@ -149,7 +150,7 @@ instance Focusable 'SearchMail where
   switchFocus _ = pure . over (asMailIndex . miSearchEditor) (E.applyEdit gotoEOL)
 
 instance Focusable 'ManageTags where
-  switchFocus _ = prepareTagEditMode
+  switchFocus _ = pure . prepareTagEditMode
 
 instance Focusable 'BrowseMail where
   switchFocus _ = pure
@@ -242,7 +243,8 @@ displayMail :: Action ctx AppState
 displayMail =
     Action
     { _aDescription = "display an e-mail"
-    , _aAction = \s -> liftIO $ updateStateWithParsedMail s >>= updateReadState Notmuch.removeTags
+    , _aAction = \s -> liftIO $ updateStateWithParsedMail s
+                       >>= updateReadState Notmuch.removeTags
     }
 
 displayThreadMails :: Action 'BrowseThreads AppState
@@ -308,21 +310,33 @@ setTags :: [Text] -> Action ctx AppState
 setTags ts =
     Action
     { _aDescription = "apply given tags"
-    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.setTags s)
+    , _aAction = (\s -> case view asAppMode s of
+                     BrowseMail -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s
+                                   $ \m -> applyItemTags m ts Notmuch.setTags s
+                     _ -> liftIO . selectedItemHelper (asMailIndex . miListOfThreads) s
+                          $ \m -> applyItemTags m ts Notmuch.setTags s)
     }
 
 addTags :: [Text] -> Action ctx AppState
 addTags ts =
     Action
     { _aDescription = "add given tags"
-    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.addTags s)
+    , _aAction = (\s -> case view asAppMode s of
+                     BrowseMail -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s
+                                   $ \m -> applyItemTags m ts Notmuch.addTags s
+                     _ -> liftIO . selectedItemHelper (asMailIndex . miListOfThreads) s
+                          $ \m -> applyItemTags m ts Notmuch.addTags s)
     }
 
 removeTags :: [Text] -> Action ctx AppState
 removeTags ts =
     Action
     { _aDescription = "remove given tags"
-    , _aAction = (\s -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyMailTags m ts Notmuch.removeTags s)
+    , _aAction = (\s -> case view asAppMode s of
+                     BrowseMail -> liftIO . selectedItemHelper (asMailIndex . miListOfMails) s
+                                   $ \m -> applyItemTags m ts Notmuch.removeTags s
+                     _ -> liftIO . selectedItemHelper (asMailIndex . miListOfThreads) s
+                          $ \m -> applyItemTags m ts Notmuch.removeTags s)
     }
 
 reloadList :: Action 'BrowseThreads AppState
@@ -355,21 +369,36 @@ selectedItemHelper l s func =
   Just (_, m) -> func m
   Nothing -> pure $ setError (GenericError "No item selected.")
 
-applyMailTags
-    :: MonadIO f
-    => t1
-    -> t
-    -> (t1 -> t -> NotmuchMail)
+class ListItemSetter a where
+  updateListItem :: a -> AppState -> AppState
+
+instance ListItemSetter NotmuchMail where
+  updateListItem m = over (asMailIndex . miListOfMails) (\x -> L.listModify (const m) x)
+
+instance ListItemSetter NotmuchThread where
+  updateListItem m = over (asMailIndex . miListOfThreads) (\x -> L.listModify (const m) x)
+
+applyItemTags
+    :: (ListItemSetter a, Notmuch.ManageTags a, MonadIO f)
+    => a
+    -> [Text]
+    -> (a -> [Text] -> a)
     -> AppState
     -> f (AppState -> AppState)
-applyMailTags m ts op s = let dbpath = view (asConfig . confNotmuch . nmDatabase) s
-  in either setError updateMailInList <$> runExceptT (Notmuch.setNotmuchMailTags dbpath (op m ts))
+applyItemTags m ts op s =
+  let dbpath = view (asConfig . confNotmuch . nmDatabase) s
+  in either setError updateListItem <$> runExceptT (Notmuch.writeToNotmuch dbpath (op m ts))
 
 applyEditorMailTags :: AppState -> IO AppState
-applyEditorMailTags s = selectedItemHelper (asMailIndex . miListOfMails) s $ \m ->
+applyEditorMailTags s = case view asAppMode s of
+  BrowseMail -> selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyEditorMailTags' m s
+  _ -> selectedItemHelper (asMailIndex . miListOfThreads) s $ \m -> applyEditorMailTags' m s
+
+applyEditorMailTags' :: (ListItemSetter a, Notmuch.ManageTags a) => a -> AppState -> IO (AppState -> AppState)
+applyEditorMailTags' m s =
   let contents = (unlines $ E.getEditContents $ view (asMailIndex . miSearchEditor) s)
       tags = strip <$> splitOn "," contents
-  in applyMailTags m tags Notmuch.setTags s
+  in applyItemTags m tags Notmuch.setTags s
 
 restoreNMSearch :: AppState -> T.EventM Name AppState
 restoreNMSearch s =
@@ -384,32 +413,27 @@ updateStateWithParsedMail s = selectedItemHelper (asMailIndex . miListOfMails) s
             <$> runExceptT (parseMail m (view (asConfig . confNotmuch . nmDatabase) s))
 
 updateReadState :: (NotmuchMail -> [Text] -> NotmuchMail) -> AppState -> IO AppState
-updateReadState op s = selectedItemHelper (asMailIndex . miListOfMails)s $ \m ->
-            let newTag = view (asConfig . confNotmuch . nmNewTag) s
-                dbpath = view (asConfig . confNotmuch . nmDatabase) s
-            in either setError updateMailInList
-               <$> runExceptT (Notmuch.setNotmuchMailTags dbpath (op m [newTag]))
-
-updateMailInList :: NotmuchMail -> AppState -> AppState
-updateMailInList m s =
-    let l = L.listModify (const m) (view (asMailIndex . miListOfMails) s)
-    in set (asMailIndex . miListOfMails) l s
+updateReadState op s =
+  let newTag = view (asConfig . confNotmuch . nmNewTag) s
+  in selectedItemHelper (asMailIndex . miListOfMails) s $ \m -> applyItemTags m [newTag] op s
 
 setError :: Error -> AppState -> AppState
 setError = set asError . Just
 
-prepareTagEditMode :: AppState -> T.EventM Name AppState
-prepareTagEditMode s = case L.listSelectedElement (view (asMailIndex . miListOfMails) s) of
-  Just (_, m) ->
-    let tags = intercalate "," $ view mailTags m
+prepareTagEditMode :: AppState -> AppState
+prepareTagEditMode s = case view asAppMode s of
+  BrowseMail -> maybe s (setTagEditor s) (L.listSelectedElement (view (asMailIndex . miListOfMails) s))
+  _ -> maybe s (setTagEditor s) (L.listSelectedElement (view (asMailIndex . miListOfThreads) s))
+
+setTagEditor :: Notmuch.ManageTags a => AppState -> (Int, a) -> AppState
+setTagEditor s (_, m) =
+    let tags = intercalate "," $ Notmuch.getTags m
         contents = currentLine $ view (asMailIndex . miSearchEditor . E.editContentsL) s
-    in pure
-       $ s
+    in s
        & set (asMailIndex . miSearchEditor) (E.editor ManageTagsEditor (Just 1) tags)
        -- shelf the current search state
        . set (asConfig . confNotmuch . nmSearch) contents
        . over (asMailIndex . miSearchEditor) (E.applyEdit gotoEOL)
-  Nothing -> pure s
 
 replyToMail :: AppState -> T.EventM Name AppState
 replyToMail s =

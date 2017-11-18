@@ -9,6 +9,8 @@ import Data.List (union)
 myBrowseThreadsKbs :: [Keybinding 'BrowseThreads (Next AppState)]
 myBrowseThreadsKbs =
   [ Keybinding (EvKey (KChar 'q') []) quit
+  , Keybinding (EvKey (KChar 'j') []) (mailIndexDown `chain` continue)
+  , Keybinding (EvKey (KChar 'k') []) (mailIndexUp `chain` continue)
   ]
 
 myBrowseMailKeybindings :: [Keybinding 'BrowseMail (Next AppState)]
